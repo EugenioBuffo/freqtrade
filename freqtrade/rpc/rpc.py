@@ -1083,6 +1083,25 @@ class RPC:
             _data = _data.iloc[-limit:]
 
         return _data, last_analyzed
+    
+    def _rpc_generate_plot(
+        self,
+        pair: str,
+        timeframe: str,
+        limit: int,
+        indicators1: List[str] = [],
+        indicators2: List[str] = []):
+
+        _data, last_analyzed = self.__rpc_analysed_dataframe_raw(pair, timeframe, limit)
+        
+        from freqtrade.plot.plotting import generate_candlestick_graph
+        fig = generate_candlestick_graph(pair=pair,
+                data=_data,
+                indicators1=indicators1,
+                indicators2=indicators2,
+                plot_config={}
+            )
+        return fig, _data
 
     def _ws_all_analysed_dataframes(
         self,

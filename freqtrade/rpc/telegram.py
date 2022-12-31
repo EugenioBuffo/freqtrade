@@ -18,9 +18,9 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import arrow
 from tabulate import tabulate
 from telegram import (MAX_MESSAGE_LENGTH, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                      KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update)
+                      KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, BotCommand)
 from telegram.error import BadRequest, NetworkError, TelegramError
-from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, Updater
+from telegram.ext import CallbackContext, CallbackQueryHandler, CommandHandler, Updater, MessageHandler, MessageFilter, Filters
 from telegram.utils.helpers import escape_markdown
 
 from freqtrade.__init__ import __version__
@@ -102,6 +102,7 @@ class Telegram(RPCHandler):
         self._updater: Updater
         self._init_keyboard()
         self._init()
+        self._init_commands()
 
     def _init_keyboard(self) -> None:
         """
@@ -109,27 +110,18 @@ class Telegram(RPCHandler):
         section.
         """
         self._keyboard: List[List[Union[str, KeyboardButton]]] = [
-            ['/daily', '/profit', '/balance'],
-            ['/status', '/status table', '/performance'],
-            ['/count', '/start', '/stop', '/help']
+            ['✳️ Status', '💳 Balance'],
+            ['📈 Graph'],
+            ['✅ Start','❌ Stop']
         ]
         # do not allow commands with mandatory arguments and critical cmds
         # TODO: DRY! - its not good to list all valid cmds here. But otherwise
         #       this needs refactoring of the whole telegram module (same
         #       problem in _help()).
         valid_keys: List[str] = [
-            r'/start$', r'/stop$', r'/status$', r'/status table$',
-            r'/trades$', r'/performance$', r'/buys', r'/entries',
-            r'/sells', r'/exits', r'/mix_tags',
-            r'/daily$', r'/daily \d+$', r'/profit$', r'/profit \d+',
-            r'/stats$', r'/count$', r'/locks$', r'/balance$',
-            r'/stopbuy$', r'/stopentry$', r'/reload_config$', r'/show_config$',
-            r'/logs$', r'/whitelist$', r'/whitelist(\ssorted|\sbaseonly)+$',
-            r'/blacklist$', r'/bl_delete$',
-            r'/weekly$', r'/weekly \d+$', r'/monthly$', r'/monthly \d+$',
-            r'/forcebuy$', r'/forcelong$', r'/forceshort$',
-            r'/forcesell$', r'/forceexit$',
-            r'/edge$', r'/health$', r'/help$', r'/version$'
+            ['✳️ Status', '💳 Balance'],
+            ['📈 Graph'],
+            ['✅ Start','❌ Stop']
         ]
         # Create keys for generation
         valid_keys_print = [k.replace('$', '') for k in valid_keys]
@@ -151,6 +143,84 @@ class Telegram(RPCHandler):
                 logger.info('using custom keyboard from '
                             f'config.json: {self._keyboard}')
 
+    def _init_commands(self) -> None:
+        """
+        Validates the commands configuration from telegram config
+        section.
+        """
+
+        self._commands: List[BotCommand] = [
+            BotCommand("start", "Start the bot."),
+            BotCommand("stop", "Stop the bot."),
+            BotCommand("status", "Show active trade."),
+            BotCommand("graph", "Show current graph."),
+            # BotCommand("status table", "Show trade table."),
+            BotCommand("performance", "Show performance of pairs."),
+            BotCommand("buys", "Show buys performance per tag."),
+            BotCommand("exits", "Show exit performance per tag."),
+            BotCommand("mix_tags", "Show all performance per tag."),
+            BotCommand("daily", "Show daily performance."),
+            BotCommand("weekly", "Show weekly performance."),
+            BotCommand("monthly", "Show monthly performance."),
+            BotCommand("profit", "Show report of trades."),
+            BotCommand("stats", "Show bot stats."),
+            BotCommand("count", "Return current active trades number."),
+            BotCommand("locks", "Lock a pair"),
+            BotCommand("unlock", "Unlock a pair"),
+            BotCommand("balance", "Show wallet balances."),
+            BotCommand("stopbuy", "Stop the bot from buying."),
+            BotCommand("reload_config", "Reload bot configuration."),
+            BotCommand("show_config", "Show bot configuration."),
+            BotCommand("logs", "Show bot logs."),
+            BotCommand("whitelist", "Show pair whitelist."),
+            BotCommand("blacklist", "Show pair blacklist."),
+            BotCommand("forcebuy", "Force bot to buy."),
+            BotCommand("forcesell", "Force bot to sell."),
+            BotCommand("edge", "edge."),
+            BotCommand("health", "Healtcheck."),
+            BotCommand("help", "Show bot help."),
+            BotCommand("version", "Show bot version."),
+            ]
+
+        # do not allow commands with mandatory arguments and critical cmds
+        # TODO: DRY! - its not good to list all valid cmds here. But otherwise
+        #       this needs refactoring of the whole telegram module (same
+        #       problem in _help()).
+        valid_comms: List[str] = [
+            r'/start$', r'/stop$', r'/status$', r'/status table$',
+            r'/trades$', r'/performance$', r'/buys', r'/entries',
+            r'/sells', r'/exits', r'/mix_tags',
+            r'/daily$', r'/daily \d+$', r'/profit$', r'/profit \d+',
+            r'/stats$', r'/count$', r'/locks$', r'/balance$',
+            r'/stopbuy$', r'/stopentry$', r'/reload_config$', r'/show_config$',
+            r'/logs$', r'/whitelist$', r'/whitelist(\ssorted|\sbaseonly)+$',
+            r'/blacklist$', r'/bl_delete$',
+            r'/weekly$', r'/weekly \d+$', r'/monthly$', r'/monthly \d+$',
+            r'/forcebuy$', r'/forcelong$', r'/forceshort$',
+            r'/forcesell$', r'/forceexit$',
+            r'/edge$', r'/health$', r'/help$', r'/version$'
+        ]
+        # Create keys for generation
+        valid_comms_print = [k.replace('$', '') for k in valid_comms]
+
+        # custom commands specified in config.json
+        cust_commands = self._config['telegram'].get('commands', [])
+        if cust_commands:
+            combined = "(" + ")|(".join(valid_comms) + ")"
+            # check for valid shortcuts
+            invalid_keys = [b for b in chain.from_iterable(cust_commands)
+                            if not re.match(combined, b)]
+            if len(invalid_keys):
+                err_msg = ('config.telegram.commands: Invalid commands for '
+                           f'custom Telegram commands: {invalid_keys}'
+                           f'\nvalid commands are: {valid_comms_print}')
+                raise OperationalException(err_msg)
+            else:
+                # self._commands = cust_commands
+                logger.info('using custom commands from '
+                            f'config.json: {self._commands}')
+        self._updater.bot.set_my_commands(self._commands)
+
     def _init(self) -> None:
         """
         Initializes this module with the given config,
@@ -161,12 +231,13 @@ class Telegram(RPCHandler):
                                 use_context=True)
 
         # Register command handler and start telegram message polling
-        handles = [
+        commands = [
             CommandHandler('status', self._status),
             CommandHandler('profit', self._profit),
             CommandHandler('balance', self._balance),
             CommandHandler('start', self._start),
             CommandHandler('stop', self._stop),
+            CommandHandler('graph', self._graph),
             CommandHandler(['forcesell', 'forceexit', 'fx'], self._force_exit),
             CommandHandler(['forcebuy', 'forcelong'], partial(
                 self._force_enter, order_side=SignalDirection.LONG)),
@@ -197,6 +268,15 @@ class Telegram(RPCHandler):
             CommandHandler('help', self._help),
             CommandHandler('version', self._version),
         ]
+
+        keyboard_buttons = [
+            MessageHandler(Filters.chat_type.private & Filters.text('✳️ Status'),self._status),
+            MessageHandler(Filters.chat_type.private & Filters.text('💳 Balance'),self._balance),
+            MessageHandler(Filters.chat_type.private & Filters.text('📈 Graph'),self._graph),
+            MessageHandler(Filters.chat_type.private & Filters.text('✅ Start'),self._start),
+            MessageHandler(Filters.chat_type.private & Filters.text('❌ Stop'),self._stop),
+        ]
+
         callbacks = [
             CallbackQueryHandler(self._status_table, pattern='update_status_table'),
             CallbackQueryHandler(self._daily, pattern='update_daily'),
@@ -214,8 +294,11 @@ class Telegram(RPCHandler):
             CallbackQueryHandler(self._force_exit_inline, pattern=r"force_exit__\S+"),
             CallbackQueryHandler(self._force_enter_inline, pattern=r"\S+\/\S+"),
         ]
-        for handle in handles:
-            self._updater.dispatcher.add_handler(handle)
+        for cmd in commands:
+            self._updater.dispatcher.add_handler(cmd)
+
+        for button in keyboard_buttons:
+            self._updater.dispatcher.add_handler(button)
 
         for callback in callbacks:
             self._updater.dispatcher.add_handler(callback)
@@ -228,7 +311,7 @@ class Telegram(RPCHandler):
         )
         logger.info(
             'rpc.telegram is listening for following commands: %s',
-            [h.command for h in handles]
+            [cmd.command for cmd in commands]
         )
 
     def cleanup(self) -> None:
@@ -601,6 +684,31 @@ class Telegram(RPCHandler):
                 r['orders'], r['quote_currency'], r['is_open'])
             lines.extend(lines_detail if lines_detail else "")
             self.__send_status_msg(lines, r)
+
+    def _graph(self, update: Update, context: CallbackContext) -> None:
+        """
+        handler for `/graph` <n>.
+
+        """
+        # Check if there's at least one numerical ID provided.
+        # If so, try to get only these trades.
+        candle_history = 30
+        if context.args and len(context.args) > 0:
+            candle_history = int(context.args[0])
+
+        results = self._rpc._rpc_trade_status()
+        for r in results:
+            plot, _dataframe = self._rpc._rpc_generate_plot(r['pair'],"1m",candle_history,["avg_1h","sar"])
+            image = plot.to_image("PNG")
+            caption = (
+                f"Last *{candle_history}* candles for *{r['pair']}.*\n"
+                f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
+                f"`Current AVG.1h: `{round(_dataframe['avg_1h'].iloc[-1],2)}\n"
+                f"`Current SAR:    `{round(_dataframe['sar'].iloc[-1],2)}`\n"
+                
+            )
+            
+            self._send_img(image, caption)
 
     def __send_status_msg(self, lines: List[str], r: Dict[str, Any]) -> None:
         """
@@ -1446,10 +1554,10 @@ class Telegram(RPCHandler):
                                  "Optionally takes a rate at which to sell "
                                  "(only applies to limit orders).` \n")
         message = (
-            "_Bot Control_\n"
+            "*BOT COMMANDS*\n"
             "------------\n"
             "*/start:* `Starts the trader`\n"
-            "*/stop:* Stops the trader\n"
+            "*/stop:* `Stops the trader`\n"
             "*/stopentry:* `Stops entering, but handles open trades gracefully` \n"
             "*/forceexit <trade_id>|all:* `Instantly exits the given trade or all trades, "
             "regardless of profit`\n"
@@ -1464,8 +1572,8 @@ class Telegram(RPCHandler):
             "`Delete pair / pattern from blacklist. Will reset on reload_conf.` \n"
             "*/reload_config:* `Reload configuration file` \n"
             "*/unlock <pair|id>:* `Unlock this Pair (or this lock id if it's numeric)`\n"
-
-            "_Current state_\n"
+            "\n"
+            "*CURRENT STATE*\n"
             "------------\n"
             "*/show_config:* `Show running configuration` \n"
             "*/locks:* `Show currently locked pairs`\n"
@@ -1474,15 +1582,14 @@ class Telegram(RPCHandler):
             "*/count:* `Show number of active trades compared to allowed number of trades`\n"
             "*/edge:* `Shows validated pairs by Edge if it is enabled` \n"
             "*/health* `Show latest process timestamp - defaults to 1970-01-01 00:00:00` \n"
-
-            "_Statistics_\n"
+            "\n"
+            "*STATISTICS*\n"
             "------------\n"
-            "*/status <trade_id>|[table]:* `Lists all open trades`\n"
-            "         *<trade_id> :* `Lists one or more specific trades.`\n"
-            "                        `Separate multiple <trade_id> with a blank space.`\n"
-            "         *table :* `will display trades in a table`\n"
-            "                `pending buy orders are marked with an asterisk (*)`\n"
-            "                `pending sell orders are marked with a double asterisk (**)`\n"
+            "*/status <trade_id>|[table]: *`Lists all open trades`\n"
+            "*<trade_id>:* `Lists one or more specific trades. Separate multiple <trade_id> with a blank space.`\n"
+            "*table:* `will display trades in a table.`\n"
+            "`- Pending buy orders are marked with an asterisk (*)`\n"
+            "`- Pending sell orders are marked with a double asterisk (**)`\n"
             "*/buys <pair|none>:* `Shows the enter_tag performance`\n"
             "*/sells <pair|none>:* `Shows the exit reason performance`\n"
             "*/mix_tags <pair|none>:* `Shows combined entry tag + exit reason performance`\n"
@@ -1657,3 +1764,62 @@ class Telegram(RPCHandler):
                 'TelegramError: %s! Giving up on that message.',
                 telegram_err.message
             )
+
+    def _send_img(self, img: bytes, 
+                    caption: str = "",  
+                    parse_mode: str = ParseMode.MARKDOWN,
+                    disable_notification: bool = False,
+                    keyboard: List[List[InlineKeyboardButton]] = None,
+                    callback_path: str = "",
+                    reload_able: bool = False,
+                    query: Optional[CallbackQuery] = None) -> None:
+            """
+            Send given markdown message
+            :param img: image
+            :param caption: caption of the image
+            :param parse_mode: telegram parse mode
+            :return: None
+            """
+            reply_markup: Union[InlineKeyboardMarkup, ReplyKeyboardMarkup]
+            if query:
+                self._update_msg(query=query, photo=img, caption=caption, parse_mode=parse_mode,
+                                callback_path=callback_path, reload_able=reload_able)
+                return
+            if reload_able and self._config['telegram'].get('reload', True):
+                reply_markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Refresh", callback_data=callback_path)]])
+            else:
+                if keyboard is not None:
+                    reply_markup = InlineKeyboardMarkup(keyboard, resize_keyboard=True)
+                else:
+                    reply_markup = ReplyKeyboardMarkup(self._keyboard, resize_keyboard=True)
+            try:
+                try:
+                    self._updater.bot.send_photo(
+                        self._config['telegram']['chat_id'],
+                        photo=img,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        disable_notification=disable_notification,
+                    )
+                except NetworkError as network_err:
+                    # Sometimes the telegram server resets the current connection,
+                    # if this is the case we send the message again.
+                    logger.warning(
+                        'Telegram NetworkError: %s! Trying one more time.',
+                        network_err.message
+                    )
+                    self._updater.bot.send_message(
+                        self._config['telegram']['chat_id'],
+                        photo=img,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        disable_notification=disable_notification,
+                    )
+            except TelegramError as telegram_err:
+                logger.warning(
+                    'TelegramError: %s! Giving up on that message.',
+                    telegram_err.message
+                )
