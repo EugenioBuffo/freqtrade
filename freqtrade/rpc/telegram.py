@@ -119,9 +119,9 @@ class Telegram(RPCHandler):
         #       this needs refactoring of the whole telegram module (same
         #       problem in _help()).
         valid_keys: List[str] = [
-            ['✳️ Status', '💳 Balance'],
-            ['📈 Graph'],
-            ['✅ Start','❌ Stop']
+            '✳️ Status', '💳 Balance',
+            '📈 Graph',
+            '✅ Start','❌ Stop'
         ]
         # Create keys for generation
         valid_keys_print = [k.replace('$', '') for k in valid_keys]
@@ -697,18 +697,23 @@ class Telegram(RPCHandler):
         if context.args and len(context.args) > 0:
             candle_history = int(context.args[0])
 
-        results = self._rpc._rpc_trade_status()
-        for r in results:
-            plot, _dataframe = self._rpc._rpc_generate_plot(r['pair'],"1m",candle_history,["avg_1h","sar"])
+        pairs_whitelist = self._rpc._rpc_whitelist()['whitelist']
+        config = RPC._rpc_show_config(self._config, self._rpc._freqtrade.state)
+        for pair in sorted(pairs_whitelist):
+            plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history,["avg_1h","sar"])
             image = plot.to_image("PNG")
             caption = (
-                f"Last *{candle_history}* candles for *{r['pair']}.*\n"
+                f"Last *{candle_history}* candles for *{pair}.*\n"
+                f"`----------------`\n"
+                f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
                 f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
                 f"`Current AVG.1h: `{round(_dataframe['avg_1h'].iloc[-1],2)}\n"
-                f"`Current SAR:    `{round(_dataframe['sar'].iloc[-1],2)}`\n"
+                f"`Current SAR:    `{round(_dataframe['sar'].iloc[-1],2)}\n"
+                f"`----------------`\n"
+                f"`Timeframe:      `{config['timeframe']}\n"
                 
             )
-            
+
             self._send_img(image, caption)
 
     def __send_status_msg(self, lines: List[str], r: Dict[str, Any]) -> None:
