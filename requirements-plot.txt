@@ -2,3 +2,6 @@
 -r requirements.txt
 
 plotly==5.11.0
+
+# Telegram Graph Generation
+kaleido==0.2.1
