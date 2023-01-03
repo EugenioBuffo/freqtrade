@@ -101,6 +101,7 @@ target/
 .venv
 .idea
 .vscode
+!.vscode/tasks.json
 
 .pytest_cache/
 .mypy_cache/

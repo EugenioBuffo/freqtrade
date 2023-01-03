@@ -1120,12 +1120,15 @@ class RPC:
         _data, last_analyzed = self.__rpc_analysed_dataframe_raw(pair, timeframe, limit)
         
         from freqtrade.plot.plotting import generate_candlestick_graph
+        
         fig = generate_candlestick_graph(pair=pair,
                 data=_data,
                 indicators1=indicators1,
                 indicators2=indicators2,
                 plot_config={}
             )
+            
+        fig.show(config={'doubleClick': 'reset'})
         return fig, _data
 
     def _ws_all_analysed_dataframes(
