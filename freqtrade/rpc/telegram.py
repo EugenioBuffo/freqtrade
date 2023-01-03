@@ -702,7 +702,7 @@ class Telegram(RPCHandler):
             plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history,["avg_1h","sar"])
             image = plot.to_image("PNG")
             caption = (
-                f"Last *{candle_history}* candles for *{pair}.*\n"
+                f"Last *{len(_dataframe.index)}* candles for *{pair}.*\n"
                 f"`----------------`\n"
                 f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
                 f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
