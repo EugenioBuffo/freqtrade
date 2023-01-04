@@ -687,10 +687,13 @@ class Telegram(RPCHandler):
             self.__send_status_msg(lines, r)
 
     def _graph(self, update: Update, context: CallbackContext) -> None:
+
+            
         """
         handler for `/graph` <n>.
 
         """
+
         # Check if there's at least one numerical ID provided.
         # If so, try to get only these trades.
         candle_history = 30
@@ -700,18 +703,23 @@ class Telegram(RPCHandler):
         pairs_whitelist = self._rpc._rpc_whitelist()['whitelist']
         config = RPC._rpc_show_config(self._config, self._rpc._freqtrade.state)
         for pair in sorted(pairs_whitelist):
-            plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history,["avg_1h","sar"])
+            plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history)
             image = plot.to_image("PNG")
+            indicators = self._rpc._rpc_get_indicators(pair,config['timeframe'])
             caption = (
                 f"Last *{len(_dataframe.index)}* candles for *{pair}.*\n"
                 f"`----------------`\n"
-                f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
-                f"`Current Price:  `{round(_dataframe['close'].iloc[-1],2)}\n"
-                f"`Current AVG.1h: `{round(_dataframe['avg_1h'].iloc[-1],2)}\n"
-                f"`Current SAR:    `{round(_dataframe['sar'].iloc[-1],2)}\n"
-                f"`----------------`\n"
-                f"`Timeframe:      `{config['timeframe']}\n"
+                f"`Current Price: `{round(_dataframe['close'].iloc[-1],2)}\n"
+                f"`Current Price: `{round(_dataframe['close'].iloc[-1],2)}\n"
                 
+                
+            )
+            for indicator in indicators:
+                caption+=f"`Current {indicator}: `{round(_dataframe[indicator].iloc[-1],2)}\n"
+
+            caption += (
+                f"`----------------`\n"
+                f"`Timeframe: `{config['timeframe']}\n"
             )
 
             self._send_img(image, caption)
