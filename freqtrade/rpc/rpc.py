@@ -1084,13 +1084,38 @@ class RPC:
 
         return _data, last_analyzed
     
+    
+    def _rpc_get_indicators(
+        self,
+        pair: str,
+        timeframe: str) -> List[str]:
+        """ 
+        get indicators from dataframe
+        """
+
+        _data, last_analyzed = self.__rpc_analysed_dataframe_raw(pair, timeframe, 1)
+        
+        indicators = []
+        blacklist = ["open", "close", "high", "low", "volume", "enter_long", "date"]
+        
+        import re
+        for key in _data.keys():
+            found = False
+            for element in blacklist:
+                if(re.match(f"^{element}", key)):
+                    found = True
+            if(not found): 
+                indicators.append(key)
+        
+        return indicators
+        
+
     def _rpc_generate_plot(
         self,
         pair: str,
         timeframe: str,
         limit: int,
-        indicators1: List[str] = [],
-        indicators2: List[str] = []):
+        indicators: List[str] = []):
 
         _data, last_analyzed = self.__rpc_analysed_dataframe_raw(pair, timeframe, limit)
         
@@ -1098,8 +1123,8 @@ class RPC:
         
         fig = generate_candlestick_graph(pair=pair,
                 data=_data,
-                indicators1=indicators1,
-                indicators2=indicators2,
+                indicators1=self._rpc_get_indicators(pair, timeframe),
+                indicators2=indicators,
                 plot_config={}
             )
             
