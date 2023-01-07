@@ -1121,7 +1121,7 @@ class RPC:
         _data, last_analyzed = self.__rpc_analysed_dataframe_raw(pair, timeframe, 1)
         
         indicators = []
-        blacklist = ["open", "close", "high", "low", "volume", "enter_long", "date"]
+        blacklist = ["open", "close", "high", "low", "volume", "enter_long", "date", "enter_tag"]
         
         import re
         for key in _data.keys():
