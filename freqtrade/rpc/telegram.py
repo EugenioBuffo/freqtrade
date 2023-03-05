@@ -120,7 +120,7 @@ class Telegram(RPCHandler):
         valid_keys: List[str] = [
             '✳️ Status', '💳 Balance',
             '📈 Graph',
-            '✅ Start','❌ Stop'
+            '✅ Start', '❌ Stop'
         ]
         # Create keys for generation
         valid_keys_print = [k.replace('$', '') for k in valid_keys]
@@ -179,6 +179,8 @@ class Telegram(RPCHandler):
             BotCommand("health", "Healtcheck."),
             BotCommand("help", "Show bot help."),
             BotCommand("version", "Show bot version."),
+            BotCommand(
+                "marketdir", "Updates the user managed variable that represents the current market direction."),
             ]
 
         # do not allow commands with mandatory arguments and critical cmds
@@ -271,11 +273,11 @@ class Telegram(RPCHandler):
         ]
 
         keyboard_buttons = [
-            MessageHandler(Filters.chat_type.private & Filters.text('✳️ Status'),self._status),
-            MessageHandler(Filters.chat_type.private & Filters.text('💳 Balance'),self._balance),
-            MessageHandler(Filters.chat_type.private & Filters.text('📈 Graph'),self._graph),
-            MessageHandler(Filters.chat_type.private & Filters.text('✅ Start'),self._start),
-            MessageHandler(Filters.chat_type.private & Filters.text('❌ Stop'),self._stop),
+            MessageHandler(Filters.chat_type.private & Filters.text('✳️ Status'), self._status),
+            MessageHandler(Filters.chat_type.private & Filters.text('💳 Balance'), self._balance),
+            MessageHandler(Filters.chat_type.private & Filters.text('📈 Graph'), self._graph),
+            MessageHandler(Filters.chat_type.private & Filters.text('✅ Start'), self._start),
+            MessageHandler(Filters.chat_type.private & Filters.text('❌ Stop'), self._stop),
         ]
 
         callbacks = [
@@ -708,8 +710,6 @@ class Telegram(RPCHandler):
             self.__send_status_msg(lines, r)
 
     def _graph(self, update: Update, context: CallbackContext) -> None:
-
-            
         """
         handler for `/graph` <n>.
 
@@ -727,19 +727,20 @@ class Telegram(RPCHandler):
         for pair in sorted(pairs_whitelist):
             plot_config = self._rpc._rpc_plot_config()
             logger.info(plot_config)
-            plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history)
-            
+            plot, _dataframe = self._rpc._rpc_generate_plot(
+                pair, config['timeframe'], candle_history)
+
             image = plot.to_image("JPG")
             caption = (
                 f"Last *{len(_dataframe.index)}* candles for *{pair}.*\n"
                 f"`----------------`\n"
                 f"`Current Price: `{round(_dataframe['close'].iloc[-1],2)}\n"
                 f"`Current Price: `{round(_dataframe['close'].iloc[-1],2)}\n"
-                
-                
+
+
             )
             for indicator in plot_config['main_plot'].keys():
-                caption+=f"`Current {indicator}: `{round(_dataframe[indicator].iloc[-1],2)}\n"
+                caption += f"`Current {indicator}: `{round(_dataframe[indicator].iloc[-1],2)}\n"
 
             caption += (
                 f"`----------------`\n"
@@ -1829,61 +1830,97 @@ class Telegram(RPCHandler):
                 telegram_err.message
             )
 
-    def _send_img(self, img: bytes, 
-                    caption: str = "",  
-                    parse_mode: str = ParseMode.MARKDOWN,
-                    disable_notification: bool = False,
-                    keyboard: List[List[InlineKeyboardButton]] = None,
-                    callback_path: str = "",
-                    reload_able: bool = False,
-                    query: Optional[CallbackQuery] = None) -> None:
-            """
-            Send given markdown message
-            :param img: image
-            :param caption: caption of the image
-            :param parse_mode: telegram parse mode
-            :return: None
-            """
-            reply_markup: Union[InlineKeyboardMarkup, ReplyKeyboardMarkup]
-            if query:
-                self._update_msg(query=query, photo=img, caption=caption, parse_mode=parse_mode,
-                                callback_path=callback_path, reload_able=reload_able)
-                return
-            if reload_able and self._config['telegram'].get('reload', True):
-                reply_markup = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Refresh", callback_data=callback_path)]])
+    def _send_img(self, img: bytes,
+                  caption: str = "",
+                  parse_mode: str = ParseMode.MARKDOWN,
+                  disable_notification: bool = False,
+                  keyboard: List[List[InlineKeyboardButton]] = None,
+                  callback_path: str = "",
+                  reload_able: bool = False,
+                  query: Optional[CallbackQuery] = None) -> None:
+        """
+        Send given markdown message
+        :param img: image
+        :param caption: caption of the image
+        :param parse_mode: telegram parse mode
+        :return: None
+        """
+        reply_markup: Union[InlineKeyboardMarkup, ReplyKeyboardMarkup]
+        if query:
+            self._update_msg(query=query, photo=img, caption=caption, parse_mode=parse_mode,
+                             callback_path=callback_path, reload_able=reload_able)
+            return
+        if reload_able and self._config['telegram'].get('reload', True):
+            reply_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Refresh", callback_data=callback_path)]])
+        else:
+            if keyboard is not None:
+                reply_markup = InlineKeyboardMarkup(keyboard, resize_keyboard=True)
             else:
-                if keyboard is not None:
-                    reply_markup = InlineKeyboardMarkup(keyboard, resize_keyboard=True)
-                else:
-                    reply_markup = ReplyKeyboardMarkup(self._keyboard, resize_keyboard=True)
+                reply_markup = ReplyKeyboardMarkup(self._keyboard, resize_keyboard=True)
+        try:
             try:
-                try:
-                    self._updater.bot.send_photo(
-                        self._config['telegram']['chat_id'],
-                        photo=img,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup,
-                        disable_notification=disable_notification,
-                    )
-                except NetworkError as network_err:
-                    # Sometimes the telegram server resets the current connection,
-                    # if this is the case we send the message again.
-                    logger.warning(
-                        'Telegram NetworkError: %s! Trying one more time.',
-                        network_err.message
-                    )
-                    self._updater.bot.send_message(
-                        self._config['telegram']['chat_id'],
-                        photo=img,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup,
-                        disable_notification=disable_notification,
-                    )
-            except TelegramError as telegram_err:
-                logger.warning(
-                    'TelegramError: %s! Giving up on that message.',
-                    telegram_err.message
+                self._updater.bot.send_photo(
+                    self._config['telegram']['chat_id'],
+                    photo=img,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    disable_notification=disable_notification,
                 )
+            except NetworkError as network_err:
+                # Sometimes the telegram server resets the current connection,
+                # if this is the case we send the message again.
+                logger.warning(
+                    'Telegram NetworkError: %s! Trying one more time.',
+                    network_err.message
+                )
+                self._updater.bot.send_message(
+                    self._config['telegram']['chat_id'],
+                    photo=img,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                    disable_notification=disable_notification,
+                )
+        except TelegramError as telegram_err:
+            logger.warning(
+                'TelegramError: %s! Giving up on that message.',
+                telegram_err.message
+            )
+
+    @authorized_only
+    def _changemarketdir(self, update: Update, context: CallbackContext) -> None:
+        """
+        Handler for /marketdir.
+        Updates the bot's market_direction
+        :param bot: telegram bot
+        :param update: message update
+        :return: None
+        """
+        if context.args and len(context.args) == 1:
+            new_market_dir_arg = context.args[0]
+            old_market_dir = self._rpc._get_market_direction()
+            new_market_dir = None
+            if new_market_dir_arg == "long":
+                new_market_dir = MarketDirection.LONG
+            elif new_market_dir_arg == "short":
+                new_market_dir = MarketDirection.SHORT
+            elif new_market_dir_arg == "even":
+                new_market_dir = MarketDirection.EVEN
+            elif new_market_dir_arg == "none":
+                new_market_dir = MarketDirection.NONE
+
+            if new_market_dir is not None:
+                self._rpc._update_market_direction(new_market_dir)
+                self._send_msg("Successfully updated market direction"
+                               f" from *{old_market_dir}* to *{new_market_dir}*.")
+            else:
+                raise RPCException("Invalid market direction provided. \n"
+                                   "Valid market directions: *long, short, even, none*")
+        elif context.args is not None and len(context.args) == 0:
+            old_market_dir = self._rpc._get_market_direction()
+            self._send_msg(f"Currently set market direction: *{old_market_dir}*")
+        else:
+            raise RPCException("Invalid usage of command /marketdir. \n"
+                               "Usage: */marketdir [short |  long | even | none]*")
