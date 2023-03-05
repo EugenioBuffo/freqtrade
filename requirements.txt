@@ -57,6 +57,3 @@ schedule==1.1.0
 #WS Messages
 websockets==10.4
 janus==1.0.0
-
-#ImageGeneration
-kaleido==0.2.1
