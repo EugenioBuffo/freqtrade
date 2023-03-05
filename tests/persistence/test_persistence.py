@@ -1362,6 +1362,7 @@ def test_to_json(fee):
                       'trade_duration': None,
                       'trade_duration_s': None,
                       'realized_profit': 0.0,
+                      'realized_profit_ratio': None,
                       'close_profit': None,
                       'close_profit_pct': None,
                       'close_profit_abs': None,
@@ -1438,6 +1439,7 @@ def test_to_json(fee):
                       'initial_stop_loss_pct': None,
                       'initial_stop_loss_ratio': None,
                       'realized_profit': 0.0,
+                      'realized_profit_ratio': None,
                       'close_profit': None,
                       'close_profit_pct': None,
                       'close_profit_abs': None,
@@ -2440,6 +2442,7 @@ def test_select_filled_orders(fee):
 def test_order_to_ccxt(limit_buy_order_open):
 
     order = Order.parse_from_ccxt_object(limit_buy_order_open, 'mocked', 'buy')
+    order.ft_trade_id = 1
     order.query.session.add(order)
     Order.query.session.commit()
 
