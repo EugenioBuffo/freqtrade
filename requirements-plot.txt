@@ -4,4 +4,4 @@
 plotly==5.11.0
 
 # Telegram Graph Generation
-kaleido==0.2.1
+kaleido==0.1.0post1

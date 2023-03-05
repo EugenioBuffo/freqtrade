@@ -693,6 +693,7 @@ class Telegram(RPCHandler):
 
         """
 
+        logger.info("Initializing graph")
         # Check if there's at least one numerical ID provided.
         # If so, try to get only these trades.
         candle_history = 30
@@ -702,9 +703,11 @@ class Telegram(RPCHandler):
         pairs_whitelist = self._rpc._rpc_whitelist()['whitelist']
         config = RPC._rpc_show_config(self._config, self._rpc._freqtrade.state)
         for pair in sorted(pairs_whitelist):
+            plot_config = self._rpc._rpc_plot_config()
+            logger.info(plot_config)
             plot, _dataframe = self._rpc._rpc_generate_plot(pair,config['timeframe'],candle_history)
-            image = plot.to_image("PNG")
-            indicators = self._rpc._rpc_get_indicators(pair,config['timeframe'])
+            
+            image = plot.to_image("JPG")
             caption = (
                 f"Last *{len(_dataframe.index)}* candles for *{pair}.*\n"
                 f"`----------------`\n"
@@ -713,7 +716,7 @@ class Telegram(RPCHandler):
                 
                 
             )
-            for indicator in indicators:
+            for indicator in plot_config['main_plot'].keys():
                 caption+=f"`Current {indicator}: `{round(_dataframe[indicator].iloc[-1],2)}\n"
 
             caption += (
