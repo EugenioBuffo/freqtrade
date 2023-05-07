@@ -19,10 +19,11 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
 
 import arrow
 from tabulate import tabulate
-from telegram import (MAX_MESSAGE_LENGTH, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                      KeyboardButton, ParseMode, ReplyKeyboardMarkup, Update, BotCommand)
+from telegram import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                      KeyboardButton, ReplyKeyboardMarkup, Update, BotCommand)
 from telegram.error import BadRequest, NetworkError, TelegramError
-from telegram.ext import Application, CallbackContext, CallbackQueryHandler, CommandHandler, MessageHandler, MessageFilter, Filters
+from telegram.constants import (MessageLimit, ParseMode)
+from telegram.ext import Application, CallbackContext, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 from telegram.helpers import escape_markdown
 
 from freqtrade.__init__ import __version__
@@ -106,7 +107,6 @@ class Telegram(RPCHandler):
 
         self._app: Application
         self._loop: asyncio.AbstractEventLoop
-        self._init_keyboard()
         self._start_thread()
 
     def _start_thread(self):
@@ -115,7 +115,7 @@ class Telegram(RPCHandler):
         """
         self._thread = Thread(target=self._init, name='FTTelegram')
         self._thread.start()
-        self._init_commands()
+        self._init_keyboard()
 
     def _init_keyboard(self) -> None:
         """
@@ -154,6 +154,9 @@ class Telegram(RPCHandler):
                 self._keyboard = cust_keyboard
                 logger.info('using custom keyboard from '
                             f'config.json: {self._keyboard}')
+
+    def _init_telegram_app(self):
+        return Application.builder().token(self._config['telegram']['token']).build()
 
     def _init_commands(self) -> None:
         """
@@ -233,10 +236,7 @@ class Telegram(RPCHandler):
                 # self._commands = cust_commands
                 logger.info('using custom commands from '
                             f'config.json: {self._commands}')
-        self._updater.bot.set_my_commands(self._commands)
-
-    def _init_telegram_app(self):
-        return Application.builder().token(self._config['telegram']['token']).build()
+        self._app.updater.bot.set_my_commands(self._commands)
 
     def _init(self) -> None:
         """
@@ -295,11 +295,11 @@ class Telegram(RPCHandler):
         ]
 
         keyboard_buttons = [
-            MessageHandler(Filters.chat_type.private & Filters.text('✳️ Status'), self._status),
-            MessageHandler(Filters.chat_type.private & Filters.text('💳 Balance'), self._balance),
-            MessageHandler(Filters.chat_type.private & Filters.text('📈 Graph'), self._graph),
-            MessageHandler(Filters.chat_type.private & Filters.text('✅ Start'), self._start),
-            MessageHandler(Filters.chat_type.private & Filters.text('❌ Stop'), self._stop),
+            MessageHandler(filters.ChatType.PRIVATE & filters.Text('✳️ Status'), self._status),
+            MessageHandler(filters.ChatType.PRIVATE & filters.Text('💳 Balance'), self._balance),
+            MessageHandler(filters.ChatType.PRIVATE & filters.Text('📈 Graph'), self._graph),
+            MessageHandler(filters.ChatType.PRIVATE & filters.Text('✅ Start'), self._start),
+            MessageHandler(filters.ChatType.PRIVATE & filters.Text('❌ Stop'), self._stop),
         ]
 
         callbacks = [
@@ -328,9 +328,11 @@ class Telegram(RPCHandler):
         for callback in callbacks:
             self._app.add_handler(callback)
 
+        self._init_commands()
+
         logger.info(
             'rpc.telegram is listening for following commands: %s',
-            [cmd.command for cmd in commands]
+            [cmd.commands for cmd in commands]
         )
         self._loop.run_until_complete(self._startup_telegram())
 
@@ -762,7 +764,7 @@ class Telegram(RPCHandler):
             lines.extend(lines_detail if lines_detail else "")
             await self.__send_status_msg(lines, r)
 
-    def _graph(self, update: Update, context: CallbackContext) -> None:
+    async def _graph(self, update: Update, context: CallbackContext) -> None:
         """
         handler for `/graph` <n>.
 
@@ -800,7 +802,7 @@ class Telegram(RPCHandler):
                 f"`Timeframe: `{config['timeframe']}\n"
             )
 
-            self._send_img(image, caption)
+            await self._send_img(image, caption)
 
     async def __send_status_msg(self, lines: List[str], r: Dict[str, Any]) -> None:
         """
@@ -1892,14 +1894,14 @@ class Telegram(RPCHandler):
                 telegram_err.message
             )
 
-    def _send_img(self, img: bytes,
-                  caption: str = "",
-                  parse_mode: str = ParseMode.MARKDOWN,
-                  disable_notification: bool = False,
-                  keyboard: List[List[InlineKeyboardButton]] = None,
-                  callback_path: str = "",
-                  reload_able: bool = False,
-                  query: Optional[CallbackQuery] = None) -> None:
+    async def _send_img(self, img: bytes,
+                        caption: str = "",
+                        parse_mode: str = ParseMode.MARKDOWN,
+                        disable_notification: bool = False,
+                        keyboard: List[List[InlineKeyboardButton]] = None,
+                        callback_path: str = "",
+                        reload_able: bool = False,
+                        query: Optional[CallbackQuery] = None) -> None:
         """
         Send given markdown message
         :param img: image
@@ -1909,8 +1911,8 @@ class Telegram(RPCHandler):
         """
         reply_markup: Union[InlineKeyboardMarkup, ReplyKeyboardMarkup]
         if query:
-            self._update_msg(query=query, photo=img, caption=caption, parse_mode=parse_mode,
-                             callback_path=callback_path, reload_able=reload_able)
+            await self._update_msg(query=query, photo=img, caption=caption, parse_mode=parse_mode,
+                                   callback_path=callback_path, reload_able=reload_able)
             return
         if reload_able and self._config['telegram'].get('reload', True):
             reply_markup = InlineKeyboardMarkup([
@@ -1922,7 +1924,7 @@ class Telegram(RPCHandler):
                 reply_markup = ReplyKeyboardMarkup(self._keyboard, resize_keyboard=True)
         try:
             try:
-                self._updater.bot.send_photo(
+                await self._app.bot.send_photo(
                     self._config['telegram']['chat_id'],
                     photo=img,
                     caption=caption,
@@ -1937,7 +1939,7 @@ class Telegram(RPCHandler):
                     'Telegram NetworkError: %s! Trying one more time.',
                     network_err.message
                 )
-                self._updater.bot.send_message(
+                await self._app.bot.send_message(
                     self._config['telegram']['chat_id'],
                     photo=img,
                     caption=caption,
