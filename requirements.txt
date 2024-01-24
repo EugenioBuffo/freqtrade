@@ -62,3 +62,5 @@ janus==1.0.0
 
 ast-comments==1.0.1
 packaging==23.1
+
+scipy
