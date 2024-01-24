@@ -1,7 +1,7 @@
 # Include all requirements to run the bot.
 -r requirements.txt
 
-plotly==5.14.1
+plotly==5.18.0
 
 # Telegram Graph Generation
 kaleido~=0.2.1; platform_system != "Windows"

@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import psutil
 import rapidjson
-from joblib import dump, load
 from joblib.externals import cloudpickle
 from numpy.typing import NDArray
 from pandas import DataFrame
@@ -20,12 +19,18 @@ from pandas import DataFrame
 from freqtrade.configuration import TimeRange
 from freqtrade.constants import Config
 from freqtrade.data.history import load_pair_history
+from freqtrade.enums import CandleType
 from freqtrade.exceptions import OperationalException
 from freqtrade.freqai.data_kitchen import FreqaiDataKitchen
 from freqtrade.strategy.interface import IStrategy
 
 
 logger = logging.getLogger(__name__)
+
+FEATURE_PIPELINE = "feature_pipeline"
+LABEL_PIPELINE = "label_pipeline"
+TRAINDF = "trained_df"
+METADATA = "metadata"
 
 
 class pair_info(TypedDict):
@@ -257,23 +262,51 @@ class FreqaiDataDrawer:
             self.pair_dict[metadata["pair"]] = self.empty_pair_dict.copy()
             return
 
-    def set_initial_return_values(self, pair: str, pred_df: DataFrame) -> None:
+    def set_initial_return_values(self, pair: str,
+                                  pred_df: DataFrame,
+                                  dataframe: DataFrame
+                                  ) -> None:
         """
         Set the initial return values to the historical predictions dataframe. This avoids needing
         to repredict on historical candles, and also stores historical predictions despite
         retrainings (so stored predictions are true predictions, not just inferencing on trained
-        data)
+        data).
+
+        We also aim to keep the date from historical predictions so that the FreqUI displays
+        zeros during any downtime (between FreqAI reloads).
         """
 
-        hist_df = self.historic_predictions
-        len_diff = len(hist_df[pair].index) - len(pred_df.index)
-        if len_diff < 0:
-            df_concat = pd.concat([pred_df.iloc[:abs(len_diff)], hist_df[pair]],
-                                  ignore_index=True, keys=hist_df[pair].keys())
+        new_pred = pred_df.copy()
+        # set new_pred values to nans (we want to signal to user that there was nothing
+        # historically made during downtime. The newest pred will get appeneded later in
+        # append_model_predictions)
+        new_pred.iloc[:, :] = np.nan
+        new_pred["date_pred"] = dataframe["date"]
+        hist_preds = self.historic_predictions[pair].copy()
+
+        # ensure both dataframes have the same date format so they can be merged
+        new_pred["date_pred"] = pd.to_datetime(new_pred["date_pred"])
+        hist_preds["date_pred"] = pd.to_datetime(hist_preds["date_pred"])
+
+        # find the closest common date between new_pred and historic predictions
+        # and cut off the new_pred dataframe at that date
+        common_dates = pd.merge(new_pred, hist_preds, on="date_pred", how="inner")
+        if len(common_dates.index) > 0:
+            new_pred = new_pred.iloc[len(common_dates):]
         else:
-            df_concat = hist_df[pair].tail(len(pred_df.index)).reset_index(drop=True)
+            logger.warning("No common dates found between new predictions and historic "
+                           "predictions. You likely left your FreqAI instance offline "
+                           f"for more than {len(dataframe.index)} candles.")
+
+        # reindex new_pred columns to match the historic predictions dataframe
+        new_pred_reindexed = new_pred.reindex(columns=hist_preds.columns)
+        df_concat = pd.concat([hist_preds, new_pred_reindexed], ignore_index=True)
+
+        # any missing values will get zeroed out so users can see the exact
+        # downtime in FreqUI
         df_concat = df_concat.fillna(0)
-        self.model_return_values[pair] = df_concat
+        self.historic_predictions[pair] = df_concat
+        self.model_return_values[pair] = df_concat.tail(len(dataframe.index)).reset_index(drop=True)
 
     def append_model_predictions(self, pair: str, predictions: DataFrame,
                                  do_preds: NDArray[np.int_],
@@ -290,9 +323,9 @@ class FreqaiDataDrawer:
         index = self.historic_predictions[pair].index[-1:]
         columns = self.historic_predictions[pair].columns
 
-        nan_df = pd.DataFrame(np.nan, index=index, columns=columns)
+        zeros_df = pd.DataFrame(np.zeros((1, len(columns))), index=index, columns=columns)
         self.historic_predictions[pair] = pd.concat(
-            [self.historic_predictions[pair], nan_df], ignore_index=True, axis=0)
+            [self.historic_predictions[pair], zeros_df], ignore_index=True, axis=0)
         df = self.historic_predictions[pair]
 
         # model outputs and associated statistics
@@ -369,7 +402,7 @@ class FreqaiDataDrawer:
         num_keep = self.freqai_info["purge_old_models"]
         if not num_keep:
             return
-        elif type(num_keep) == bool:
+        elif isinstance(num_keep, bool):
             num_keep = 2
 
         model_folders = [x for x in self.full_path.iterdir() if x.is_dir()]
@@ -424,7 +457,7 @@ class FreqaiDataDrawer:
         dk.data["training_features_list"] = list(dk.data_dictionary["train_features"].columns)
         dk.data["label_list"] = dk.label_list
 
-        with (save_path / f"{dk.model_filename}_metadata.json").open("w") as fp:
+        with (save_path / f"{dk.model_filename}_{METADATA}.json").open("w") as fp:
             rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=rapidjson.NM_NATIVE)
 
         return
@@ -443,36 +476,36 @@ class FreqaiDataDrawer:
 
         # Save the trained model
         if self.model_type == 'joblib':
-            dump(model, save_path / f"{dk.model_filename}_model.joblib")
+            with (save_path / f"{dk.model_filename}_model.joblib").open("wb") as fp:
+                cloudpickle.dump(model, fp)
         elif self.model_type == 'keras':
             model.save(save_path / f"{dk.model_filename}_model.h5")
         elif self.model_type in ["stable_baselines3", "sb3_contrib", "pytorch"]:
             model.save(save_path / f"{dk.model_filename}_model.zip")
-
-        if dk.svm_model is not None:
-            dump(dk.svm_model, save_path / f"{dk.model_filename}_svm_model.joblib")
 
         dk.data["data_path"] = str(dk.data_path)
         dk.data["model_filename"] = str(dk.model_filename)
         dk.data["training_features_list"] = dk.training_features_list
         dk.data["label_list"] = dk.label_list
         # store the metadata
-        with (save_path / f"{dk.model_filename}_metadata.json").open("w") as fp:
+        with (save_path / f"{dk.model_filename}_{METADATA}.json").open("w") as fp:
             rapidjson.dump(dk.data, fp, default=self.np_encoder, number_mode=rapidjson.NM_NATIVE)
 
-        # save the train data to file so we can check preds for area of applicability later
+        # save the pipelines to pickle files
+        with (save_path / f"{dk.model_filename}_{FEATURE_PIPELINE}.pkl").open("wb") as fp:
+            cloudpickle.dump(dk.feature_pipeline, fp)
+
+        with (save_path / f"{dk.model_filename}_{LABEL_PIPELINE}.pkl").open("wb") as fp:
+            cloudpickle.dump(dk.label_pipeline, fp)
+
+        # save the train data to file for post processing if desired
         dk.data_dictionary["train_features"].to_pickle(
-            save_path / f"{dk.model_filename}_trained_df.pkl"
+            save_path / f"{dk.model_filename}_{TRAINDF}.pkl"
         )
 
         dk.data_dictionary["train_dates"].to_pickle(
             save_path / f"{dk.model_filename}_trained_dates_df.pkl"
         )
-
-        if self.freqai_info["feature_parameters"].get("principal_component_analysis"):
-            cloudpickle.dump(
-                dk.pca, (dk.data_path / f"{dk.model_filename}_pca_object.pkl").open("wb")
-            )
 
         self.model_dictionary[coin] = model
         self.pair_dict[coin]["model_filename"] = dk.model_filename
@@ -480,8 +513,9 @@ class FreqaiDataDrawer:
 
         if coin not in self.meta_data_dictionary:
             self.meta_data_dictionary[coin] = {}
-        self.meta_data_dictionary[coin]["train_df"] = dk.data_dictionary["train_features"]
-        self.meta_data_dictionary[coin]["meta_data"] = dk.data
+        self.meta_data_dictionary[coin][METADATA] = dk.data
+        self.meta_data_dictionary[coin][FEATURE_PIPELINE] = dk.feature_pipeline
+        self.meta_data_dictionary[coin][LABEL_PIPELINE] = dk.label_pipeline
         self.save_drawer_to_disk()
 
         return
@@ -491,7 +525,7 @@ class FreqaiDataDrawer:
         Load only metadata into datakitchen to increase performance during
         presaved backtesting (prediction file loading).
         """
-        with (dk.data_path / f"{dk.model_filename}_metadata.json").open("r") as fp:
+        with (dk.data_path / f"{dk.model_filename}_{METADATA}.json").open("r") as fp:
             dk.data = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
             dk.training_features_list = dk.data["training_features_list"]
             dk.label_list = dk.data["label_list"]
@@ -511,15 +545,17 @@ class FreqaiDataDrawer:
             dk.data_path = Path(self.pair_dict[coin]["data_path"])
 
         if coin in self.meta_data_dictionary:
-            dk.data = self.meta_data_dictionary[coin]["meta_data"]
-            dk.data_dictionary["train_features"] = self.meta_data_dictionary[coin]["train_df"]
+            dk.data = self.meta_data_dictionary[coin][METADATA]
+            dk.feature_pipeline = self.meta_data_dictionary[coin][FEATURE_PIPELINE]
+            dk.label_pipeline = self.meta_data_dictionary[coin][LABEL_PIPELINE]
         else:
-            with (dk.data_path / f"{dk.model_filename}_metadata.json").open("r") as fp:
+            with (dk.data_path / f"{dk.model_filename}_{METADATA}.json").open("r") as fp:
                 dk.data = rapidjson.load(fp, number_mode=rapidjson.NM_NATIVE)
 
-            dk.data_dictionary["train_features"] = pd.read_pickle(
-                dk.data_path / f"{dk.model_filename}_trained_df.pkl"
-            )
+            with (dk.data_path / f"{dk.model_filename}_{FEATURE_PIPELINE}.pkl").open("rb") as fp:
+                dk.feature_pipeline = cloudpickle.load(fp)
+            with (dk.data_path / f"{dk.model_filename}_{LABEL_PIPELINE}.pkl").open("rb") as fp:
+                dk.label_pipeline = cloudpickle.load(fp)
 
         dk.training_features_list = dk.data["training_features_list"]
         dk.label_list = dk.data["label_list"]
@@ -528,10 +564,8 @@ class FreqaiDataDrawer:
         if dk.live and coin in self.model_dictionary:
             model = self.model_dictionary[coin]
         elif self.model_type == 'joblib':
-            model = load(dk.data_path / f"{dk.model_filename}_model.joblib")
-        elif self.model_type == 'keras':
-            from tensorflow import keras
-            model = keras.models.load_model(dk.data_path / f"{dk.model_filename}_model.h5")
+            with (dk.data_path / f"{dk.model_filename}_model.joblib").open("rb") as fp:
+                model = cloudpickle.load(fp)
         elif 'stable_baselines' in self.model_type or 'sb3_contrib' == self.model_type:
             mod = importlib.import_module(
                 self.model_type, self.freqai_info['rl_config']['model_type'])
@@ -543,9 +577,6 @@ class FreqaiDataDrawer:
             model = zip["pytrainer"]
             model = model.load_from_checkpoint(zip)
 
-        if Path(dk.data_path / f"{dk.model_filename}_svm_model.joblib").is_file():
-            dk.svm_model = load(dk.data_path / f"{dk.model_filename}_svm_model.joblib")
-
         if not model:
             raise OperationalException(
                 f"Unable to load model, ensure model exists at " f"{dk.data_path} "
@@ -554,11 +585,6 @@ class FreqaiDataDrawer:
         # load it into ram if it was loaded from disk
         if coin not in self.model_dictionary:
             self.model_dictionary[coin] = model
-
-        if self.config["freqai"]["feature_parameters"]["principal_component_analysis"]:
-            dk.pca = cloudpickle.load(
-                (dk.data_path / f"{dk.model_filename}_pca_object.pkl").open("rb")
-            )
 
         return model
 
@@ -638,8 +664,8 @@ class FreqaiDataDrawer:
                     timeframe=tf,
                     pair=pair,
                     timerange=timerange,
-                    data_format=self.config.get("dataformat_ohlcv", "json"),
-                    candle_type=self.config.get("trading_mode", "spot"),
+                    data_format=self.config.get("dataformat_ohlcv", "feather"),
+                    candle_type=self.config.get("candle_type_def", CandleType.SPOT),
                 )
 
     def get_base_and_corr_dataframes(

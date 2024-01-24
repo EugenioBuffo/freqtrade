@@ -2,7 +2,7 @@ import logging
 import random
 from abc import abstractmethod
 from enum import Enum
-from typing import Optional, Type, Union
+from typing import List, Optional, Type, Union
 
 import gymnasium as gym
 import numpy as np
@@ -10,6 +10,8 @@ import pandas as pd
 from gymnasium import spaces
 from gymnasium.utils import seeding
 from pandas import DataFrame
+
+from freqtrade.exceptions import OperationalException
 
 
 logger = logging.getLogger(__name__)
@@ -80,8 +82,9 @@ class BaseEnvironment(gym.Env):
         self.can_short: bool = can_short
         self.live: bool = live
         if not self.live and self.add_state_info:
-            self.add_state_info = False
-            logger.warning("add_state_info is not available in backtesting. Deactivating.")
+            raise OperationalException("`add_state_info` is not available in backtesting. Change "
+                                       "parameter to false in your rl_config. See `add_state_info` "
+                                       "docs for more info.")
         self.seed(seed)
         self.reset_env(df, prices, window_size, reward_kwargs, starting_point)
 
@@ -141,6 +144,9 @@ class BaseEnvironment(gym.Env):
         Unique to the environment action count. Must be inherited.
         """
 
+    def action_masks(self) -> List[bool]:
+        return [self._is_valid(action.value) for action in self.actions]
+
     def seed(self, seed: int = 1):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
@@ -153,7 +159,7 @@ class BaseEnvironment(gym.Env):
         function is designed for tracking incremented objects,
         events, actions inside the training environment.
         For example, a user can call this to track the
-        frequency of occurence of an `is_valid` call in
+        frequency of occurrence of an `is_valid` call in
         their `calculate_reward()`:
 
         def calculate_reward(self, action: int) -> float:
@@ -180,7 +186,7 @@ class BaseEnvironment(gym.Env):
     def reset_tensorboard_log(self):
         self.tensorboard_metrics = {}
 
-    def reset(self):
+    def reset(self, seed=None):
         """
         Reset is called at the beginning of every episode
         """

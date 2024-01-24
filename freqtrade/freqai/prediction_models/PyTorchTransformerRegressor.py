@@ -27,12 +27,18 @@ class PyTorchTransformerRegressor(BasePyTorchRegressor):
         ...
         "freqai": {
             ...
+            "conv_width": 30,  // PyTorchTransformer is based on windowing
+            "feature_parameters": {
+                ...
+                "include_shifted_candles": 0,  // which removes the need for shifted candles
+                ...
+            },
             "model_training_parameters" : {
                 "learning_rate": 3e-4,
                 "trainer_kwargs": {
-                    "max_iters": 5000,
+                    "n_steps": 5000,
                     "batch_size": 64,
-                    "max_n_eval_batches": null
+                    "n_epochs": null
                 },
                 "model_kwargs": {
                     "hidden_dim": 512,
@@ -103,13 +109,13 @@ class PyTorchTransformerRegressor(BasePyTorchRegressor):
         """
 
         dk.find_features(unfiltered_df)
-        filtered_df, _ = dk.filter_features(
+        dk.data_dictionary["prediction_features"], _ = dk.filter_features(
             unfiltered_df, dk.training_features_list, training_filter=False
         )
-        filtered_df = dk.normalize_data_from_metadata(filtered_df)
-        dk.data_dictionary["prediction_features"] = filtered_df
 
-        self.data_cleaning_predict(dk)
+        dk.data_dictionary["prediction_features"], outliers, _ = dk.feature_pipeline.transform(
+            dk.data_dictionary["prediction_features"], outlier_check=True)
+
         x = self.data_convertor.convert_x(
             dk.data_dictionary["prediction_features"],
             device=self.device
@@ -119,19 +125,25 @@ class PyTorchTransformerRegressor(BasePyTorchRegressor):
         x = x.unsqueeze(0)
         # create empty torch tensor
         self.model.model.eval()
-        yb = torch.empty(0)
-        if x.shape[1] > 1:
+        yb = torch.empty(0).to(self.device)
+        if x.shape[1] > self.window_size:
             ws = self.window_size
             for i in range(0, x.shape[1] - ws):
-                xb = x[:, i:i + ws, :]
+                xb = x[:, i:i + ws, :].to(self.device)
                 y = self.model.model(xb)
-                yb = torch.cat((yb, y), dim=0)
+                yb = torch.cat((yb, y), dim=1)
         else:
             yb = self.model.model(x)
 
-        yb = yb.cpu().squeeze()
+        yb = yb.cpu().squeeze(0)
         pred_df = pd.DataFrame(yb.detach().numpy(), columns=dk.label_list)
-        pred_df = dk.denormalize_labels_from_metadata(pred_df)
+        pred_df, _, _ = dk.label_pipeline.inverse_transform(pred_df)
+
+        if self.freqai_info.get("DI_threshold", 0) > 0:
+            dk.DI_values = dk.feature_pipeline["di"].di_values
+        else:
+            dk.DI_values = np.zeros(outliers.shape[0])
+        dk.do_predict = outliers
 
         if x.shape[1] > 1:
             zeros_df = pd.DataFrame(np.zeros((x.shape[1] - len(pred_df), len(pred_df.columns))),

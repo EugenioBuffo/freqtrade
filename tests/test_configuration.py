@@ -1,7 +1,5 @@
 # pragma pylint: disable=missing-docstring, protected-access, invalid-name
 import json
-import logging
-import sys
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -17,14 +15,12 @@ from freqtrade.configuration.deprecated_settings import (check_conflicting_setti
                                                          process_deprecated_setting,
                                                          process_removed_setting,
                                                          process_temporary_deprecated_settings)
-from freqtrade.configuration.environment_vars import flat_vars_to_nested_dict
+from freqtrade.configuration.environment_vars import _flat_vars_to_nested_dict
 from freqtrade.configuration.load_config import (load_config_file, load_file, load_from_files,
                                                  log_config_error_range)
 from freqtrade.constants import DEFAULT_DB_DRYRUN_URL, DEFAULT_DB_PROD_URL, ENV_VAR_PREFIX
 from freqtrade.enums import RunMode
 from freqtrade.exceptions import OperationalException
-from freqtrade.loggers import (FTBufferingHandler, FTStdErrStreamHandler, _set_loggers,
-                               setup_logging, setup_logging_pre)
 from tests.conftest import (CURRENT_TEST_STRATEGY, log_has, log_has_re,
                             patched_configuration_load_config_file)
 
@@ -108,8 +104,8 @@ def test_load_config_file_error_range(default_conf, mocker, caplog) -> None:
     assert x == ''
 
 
-def test_load_file_error(tmpdir):
-    testpath = Path(tmpdir) / 'config.json'
+def test_load_file_error(tmp_path):
+    testpath = tmp_path / 'config.json'
     with pytest.raises(OperationalException, match=r"File .* not found!"):
         load_file(testpath)
 
@@ -594,7 +590,7 @@ def test_cli_verbose_with_params(default_conf, mocker, caplog) -> None:
     patched_configuration_load_config_file(mocker, default_conf)
 
     # Prevent setting loggers
-    mocker.patch('freqtrade.loggers._set_loggers', MagicMock)
+    mocker.patch('freqtrade.loggers.set_loggers', MagicMock)
     arglist = ['trade', '-vvv']
     args = Arguments(arglist).get_parsed_arg()
 
@@ -605,130 +601,9 @@ def test_cli_verbose_with_params(default_conf, mocker, caplog) -> None:
     assert log_has('Verbosity set to 3', caplog)
 
 
-def test_set_loggers() -> None:
-    # Reset Logging to Debug, otherwise this fails randomly as it's set globally
-    logging.getLogger('requests').setLevel(logging.DEBUG)
-    logging.getLogger("urllib3").setLevel(logging.DEBUG)
-    logging.getLogger('ccxt.base.exchange').setLevel(logging.DEBUG)
-    logging.getLogger('telegram').setLevel(logging.DEBUG)
-
-    previous_value1 = logging.getLogger('requests').level
-    previous_value2 = logging.getLogger('ccxt.base.exchange').level
-    previous_value3 = logging.getLogger('telegram').level
-
-    _set_loggers()
-
-    value1 = logging.getLogger('requests').level
-    assert previous_value1 is not value1
-    assert value1 is logging.INFO
-
-    value2 = logging.getLogger('ccxt.base.exchange').level
-    assert previous_value2 is not value2
-    assert value2 is logging.INFO
-
-    value3 = logging.getLogger('telegram').level
-    assert previous_value3 is not value3
-    assert value3 is logging.INFO
-
-    _set_loggers(verbosity=2)
-
-    assert logging.getLogger('requests').level is logging.DEBUG
-    assert logging.getLogger('ccxt.base.exchange').level is logging.INFO
-    assert logging.getLogger('telegram').level is logging.INFO
-    assert logging.getLogger('werkzeug').level is logging.INFO
-
-    _set_loggers(verbosity=3, api_verbosity='error')
-
-    assert logging.getLogger('requests').level is logging.DEBUG
-    assert logging.getLogger('ccxt.base.exchange').level is logging.DEBUG
-    assert logging.getLogger('telegram').level is logging.INFO
-    assert logging.getLogger('werkzeug').level is logging.ERROR
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="does not run on windows")
-def test_set_loggers_syslog():
-    logger = logging.getLogger()
-    orig_handlers = logger.handlers
-    logger.handlers = []
-
-    config = {'verbosity': 2,
-              'logfile': 'syslog:/dev/log',
-              }
-
-    setup_logging_pre()
-    setup_logging(config)
-    assert len(logger.handlers) == 3
-    assert [x for x in logger.handlers if type(x) == logging.handlers.SysLogHandler]
-    assert [x for x in logger.handlers if type(x) == FTStdErrStreamHandler]
-    assert [x for x in logger.handlers if type(x) == FTBufferingHandler]
-    # setting up logging again should NOT cause the loggers to be added a second time.
-    setup_logging(config)
-    assert len(logger.handlers) == 3
-    # reset handlers to not break pytest
-    logger.handlers = orig_handlers
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="does not run on windows")
-def test_set_loggers_Filehandler(tmpdir):
-    logger = logging.getLogger()
-    orig_handlers = logger.handlers
-    logger.handlers = []
-    logfile = Path(tmpdir) / 'ft_logfile.log'
-    config = {'verbosity': 2,
-              'logfile': str(logfile),
-              }
-
-    setup_logging_pre()
-    setup_logging(config)
-    assert len(logger.handlers) == 3
-    assert [x for x in logger.handlers if type(x) == logging.handlers.RotatingFileHandler]
-    assert [x for x in logger.handlers if type(x) == FTStdErrStreamHandler]
-    assert [x for x in logger.handlers if type(x) == FTBufferingHandler]
-    # setting up logging again should NOT cause the loggers to be added a second time.
-    setup_logging(config)
-    assert len(logger.handlers) == 3
-    # reset handlers to not break pytest
-    if logfile.exists:
-        logfile.unlink()
-    logger.handlers = orig_handlers
-
-
-@pytest.mark.skip(reason="systemd is not installed on every system, so we're not testing this.")
-def test_set_loggers_journald(mocker):
-    logger = logging.getLogger()
-    orig_handlers = logger.handlers
-    logger.handlers = []
-
-    config = {'verbosity': 2,
-              'logfile': 'journald',
-              }
-
-    setup_logging_pre()
-    setup_logging(config)
-    assert len(logger.handlers) == 3
-    assert [x for x in logger.handlers if type(x).__name__ == "JournaldLogHandler"]
-    assert [x for x in logger.handlers if type(x) == FTStdErrStreamHandler]
-    # reset handlers to not break pytest
-    logger.handlers = orig_handlers
-
-
-def test_set_loggers_journald_importerror(import_fails):
-    logger = logging.getLogger()
-    orig_handlers = logger.handlers
-    logger.handlers = []
-
-    config = {'verbosity': 2,
-              'logfile': 'journald',
-              }
-    with pytest.raises(OperationalException,
-                       match=r'You need the cysystemd python package.*'):
-        setup_logging(config)
-    logger.handlers = orig_handlers
-
-
-def test_set_logfile(default_conf, mocker, tmpdir):
+def test_set_logfile(default_conf, mocker, tmp_path):
     patched_configuration_load_config_file(mocker, default_conf)
-    f = Path(tmpdir / "test_file.log")
+    f = tmp_path / "test_file.log"
     assert not f.is_file()
     arglist = [
         'trade', '--logfile', str(f),
@@ -1163,8 +1038,7 @@ def test_load_config_stoploss_exchange_limit_ratio(all_conf) -> None:
         validate_config_schema(all_conf)
 
 
-@pytest.mark.parametrize("keys", [("exchange", "sandbox", False),
-                                  ("exchange", "key", ""),
+@pytest.mark.parametrize("keys", [("exchange", "key", ""),
                                   ("exchange", "secret", ""),
                                   ("exchange", "password", ""),
                                   ])
@@ -1271,7 +1145,7 @@ def test_pairlist_resolving_with_config_pl_not_exists(mocker, default_conf):
         configuration.get_config()
 
 
-def test_pairlist_resolving_fallback(mocker, tmpdir):
+def test_pairlist_resolving_fallback(mocker, tmp_path):
     mocker.patch.object(Path, "exists", MagicMock(return_value=True))
     mocker.patch.object(Path, "open", MagicMock(return_value=MagicMock()))
     mocker.patch("freqtrade.configuration.configuration.load_file",
@@ -1290,7 +1164,7 @@ def test_pairlist_resolving_fallback(mocker, tmpdir):
 
     assert config['pairs'] == ['ETH/BTC', 'XRP/BTC']
     assert config['exchange']['name'] == 'binance'
-    assert config['datadir'] == Path(tmpdir) / "user_data/data/binance"
+    assert config['datadir'] == tmp_path / "user_data/data/binance"
 
 
 @pytest.mark.parametrize("setting", [
@@ -1545,7 +1419,7 @@ def test_flat_vars_to_nested_dict(caplog):
             'chat_id': '2151'
         }
     }
-    res = flat_vars_to_nested_dict(test_args, ENV_VAR_PREFIX)
+    res = _flat_vars_to_nested_dict(test_args, ENV_VAR_PREFIX)
     assert res == expected
 
     assert log_has("Loading variable 'FREQTRADE__EXCHANGE__SOME_SETTING'", caplog)

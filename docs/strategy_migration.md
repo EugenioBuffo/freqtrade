@@ -280,7 +280,7 @@ After:
 
 ``` python hl_lines="3"
 class AwesomeStrategy(IStrategy):
-    def custom_entry_price(self, pair: str, current_time: datetime, proposed_rate: float,
+    def custom_entry_price(self, pair: str, trade: Optional[Trade], current_time: datetime, proposed_rate: float,
                            entry_tag: Optional[str], side: str, **kwargs) -> float:
       return proposed_rate
 ```
@@ -311,12 +311,13 @@ After:
 
 ``` python hl_lines="5 7"
     def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime,
-                        current_rate: float, current_profit: float, **kwargs) -> float:
+                        current_rate: float, current_profit: float, after_fill: bool, 
+                        **kwargs) -> Optional[float]:
         # once the profit has risen above 10%, keep the stoploss at 7% above the open price
         if current_profit > 0.10:
             return stoploss_from_open(0.07, current_profit, is_short=trade.is_short)
 
-        return stoploss_from_absolute(current_rate - (candle['atr'] * 2), current_rate, is_short=trade.is_short)
+        return stoploss_from_absolute(current_rate - (candle['atr'] * 2), current_rate, is_short=trade.is_short, leverage=trade.leverage)
 
 
 ```
@@ -569,7 +570,7 @@ def populate_any_indicators(
 ```
 
 1. Features - Move to `feature_engineering_expand_all`
-2. Basic features, not expanded across `include_periods_candles` - move to`feature_engineering_expand_basic()`.
+2. Basic features, not expanded across `indicator_periods_candles` - move to`feature_engineering_expand_basic()`.
 3. Standard features which should not be expanded - move to `feature_engineering_standard()`.
 4. Targets - Move this part to `set_freqai_targets()`.
 
@@ -728,3 +729,86 @@ Targets now get their own, dedicated method.
 
         return dataframe
 ```
+
+
+### FreqAI - New data Pipeline
+
+If you have created your own custom `IFreqaiModel` with a custom `train()`/`predict()` function, *and* you still rely on `data_cleaning_train/predict()`, then you will need to migrate to the new pipeline. If your model does *not* rely on `data_cleaning_train/predict()`, then you do not need to worry about this migration. That means that this migration guide is relevant for a very small percentage of power-users. If you stumbled upon this guide by mistake, feel free to inquire in depth about your problem in the Freqtrade discord server.
+
+The conversion involves first removing `data_cleaning_train/predict()` and replacing them with a `define_data_pipeline()` and `define_label_pipeline()` function to your `IFreqaiModel` class:
+
+```python  linenums="1" hl_lines="11-14 47-49 55-57"
+class MyCoolFreqaiModel(BaseRegressionModel):
+    """
+    Some cool custom IFreqaiModel you made before Freqtrade version 2023.6
+    """
+    def train(
+        self, unfiltered_df: DataFrame, pair: str, dk: FreqaiDataKitchen, **kwargs
+    ) -> Any:
+
+        # ... your custom stuff
+
+        # Remove these lines
+        # data_dictionary = dk.make_train_test_datasets(features_filtered, labels_filtered)
+        # self.data_cleaning_train(dk)
+        # data_dictionary = dk.normalize_data(data_dictionary)
+        # (1)
+
+        # Add these lines. Now we control the pipeline fit/transform ourselves
+        dd = dk.make_train_test_datasets(features_filtered, labels_filtered)
+        dk.feature_pipeline = self.define_data_pipeline(threads=dk.thread_count)
+        dk.label_pipeline = self.define_label_pipeline(threads=dk.thread_count)
+
+        (dd["train_features"],
+         dd["train_labels"],
+         dd["train_weights"]) = dk.feature_pipeline.fit_transform(dd["train_features"],
+                                                                  dd["train_labels"],
+                                                                  dd["train_weights"])
+
+        (dd["test_features"],
+         dd["test_labels"],
+         dd["test_weights"]) = dk.feature_pipeline.transform(dd["test_features"],
+                                                             dd["test_labels"],
+                                                             dd["test_weights"])
+
+        dd["train_labels"], _, _ = dk.label_pipeline.fit_transform(dd["train_labels"])
+        dd["test_labels"], _, _ = dk.label_pipeline.transform(dd["test_labels"])
+
+        # ... your custom code
+
+        return model
+
+    def predict(
+        self, unfiltered_df: DataFrame, dk: FreqaiDataKitchen, **kwargs
+    ) -> Tuple[DataFrame, npt.NDArray[np.int_]]:
+
+        # ... your custom stuff
+
+        # Remove these lines:
+        # self.data_cleaning_predict(dk)
+        # (2)
+
+        # Add these lines:
+        dk.data_dictionary["prediction_features"], outliers, _ = dk.feature_pipeline.transform(
+            dk.data_dictionary["prediction_features"], outlier_check=True)
+
+        # Remove this line
+        # pred_df = dk.denormalize_labels_from_metadata(pred_df)
+        # (3)
+
+        # Replace with these lines
+        pred_df, _, _ = dk.label_pipeline.inverse_transform(pred_df)
+        if self.freqai_info.get("DI_threshold", 0) > 0:
+            dk.DI_values = dk.feature_pipeline["di"].di_values
+        else:
+            dk.DI_values = np.zeros(outliers.shape[0])
+        dk.do_predict = outliers
+
+        # ... your custom code
+        return (pred_df, dk.do_predict)
+```
+
+
+1. Data normalization and cleaning is now homogenized with the new pipeline definition. This is created in the new `define_data_pipeline()` and `define_label_pipeline()` functions. The `data_cleaning_train()` and `data_cleaning_predict()` functions are no longer used. You can override `define_data_pipeline()` to create your own custom pipeline if you wish.
+2. Data normalization and cleaning is now homogenized with the new pipeline definition. This is created in the new `define_data_pipeline()` and `define_label_pipeline()` functions. The `data_cleaning_train()` and `data_cleaning_predict()` functions are no longer used. You can override `define_data_pipeline()` to create your own custom pipeline if you wish.
+3. Data denormalization is done with the new pipeline. Replace this with the lines below.

@@ -35,7 +35,7 @@ def test__get_params_binance(default_conf, mocker, side, type, time_in_force, ex
 ])
 def test_create_stoploss_order_binance(default_conf, mocker, limitratio, expected, side, trademode):
     api_mock = MagicMock()
-    order_id = 'test_prod_buy_{}'.format(randint(0, 10 ** 6))
+    order_id = f'test_prod_buy_{randint(0, 10 ** 6)}'
     order_type = 'stop_loss_limit' if trademode == TradingMode.SPOT else 'stop'
 
     api_mock.create_order = MagicMock(return_value={
@@ -514,7 +514,7 @@ def test_fill_leverage_tiers_binance_dryrun(default_conf, mocker, leverage_tiers
 
 def test_additional_exchange_init_binance(default_conf, mocker):
     api_mock = MagicMock()
-    api_mock.fapiPrivateGetPositionsideDual = MagicMock(return_value={"dualSidePosition": True})
+    api_mock.fapiPrivateGetPositionSideDual = MagicMock(return_value={"dualSidePosition": True})
     api_mock.fapiPrivateGetMultiAssetsMargin = MagicMock(return_value={"multiAssetsMargin": True})
     default_conf['dry_run'] = False
     default_conf['trading_mode'] = TradingMode.FUTURES
@@ -522,12 +522,12 @@ def test_additional_exchange_init_binance(default_conf, mocker):
     with pytest.raises(OperationalException,
                        match=r"Hedge Mode is not supported.*\nMulti-Asset Mode is not supported.*"):
         get_patched_exchange(mocker, default_conf, id="binance", api_mock=api_mock)
-    api_mock.fapiPrivateGetPositionsideDual = MagicMock(return_value={"dualSidePosition": False})
+    api_mock.fapiPrivateGetPositionSideDual = MagicMock(return_value={"dualSidePosition": False})
     api_mock.fapiPrivateGetMultiAssetsMargin = MagicMock(return_value={"multiAssetsMargin": False})
     exchange = get_patched_exchange(mocker, default_conf, id="binance", api_mock=api_mock)
     assert exchange
     ccxt_exceptionhandlers(mocker, default_conf, api_mock, 'binance',
-                           "additional_exchange_init", "fapiPrivateGetPositionsideDual")
+                           "additional_exchange_init", "fapiPrivateGetPositionSideDual")
 
 
 def test__set_leverage_binance(mocker, default_conf):

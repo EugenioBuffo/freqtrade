@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import ccxt
@@ -269,9 +268,9 @@ def test_additional_exchange_init_okx(default_conf, mocker):
                            "additional_exchange_init", "fetch_accounts")
 
 
-def test_load_leverage_tiers_okx(default_conf, mocker, markets, tmpdir, caplog, time_machine):
+def test_load_leverage_tiers_okx(default_conf, mocker, markets, tmp_path, caplog, time_machine):
 
-    default_conf['datadir'] = Path(tmpdir)
+    default_conf['datadir'] = tmp_path
     # fd_mock = mocker.patch('freqtrade.exchange.exchange.file_dump_json')
     api_mock = MagicMock()
     type(api_mock).has = PropertyMock(return_value={
@@ -499,7 +498,11 @@ def test__set_leverage_okx(mocker, default_conf):
     assert api_mock.set_leverage.call_args_list[0][1]['params'] == {
         'mgnMode': 'isolated',
         'posSide': 'net'}
+    api_mock.set_leverage = MagicMock(side_effect=ccxt.NetworkError())
+    exchange._lev_prep('BTC/USDT:USDT', 3.2, 'buy')
+    api_mock.fetch_leverage.call_count == 1
 
+    api_mock.fetch_leverage = MagicMock(side_effect=ccxt.NetworkError())
     ccxt_exceptionhandlers(
         mocker,
         default_conf,
@@ -592,3 +595,92 @@ def test_stoploss_adjust_okx(mocker, default_conf, sl1, sl2, sl3, side):
     }
     assert exchange.stoploss_adjust(sl1, order, side=side)
     assert not exchange.stoploss_adjust(sl2, order, side=side)
+
+
+def test_stoploss_cancel_okx(mocker, default_conf):
+    exchange = get_patched_exchange(mocker, default_conf, id='okx')
+
+    exchange.cancel_order = MagicMock()
+
+    exchange.cancel_stoploss_order('1234', 'ETH/USDT')
+    assert exchange.cancel_order.call_count == 1
+    assert exchange.cancel_order.call_args_list[0][1]['order_id'] == '1234'
+    assert exchange.cancel_order.call_args_list[0][1]['pair'] == 'ETH/USDT'
+    assert exchange.cancel_order.call_args_list[0][1]['params'] == {'stop': True}
+
+
+def test__get_stop_params_okx(mocker, default_conf):
+    default_conf['trading_mode'] = 'futures'
+    default_conf['margin_mode'] = 'isolated'
+    exchange = get_patched_exchange(mocker, default_conf, id='okx')
+    params = exchange._get_stop_params('ETH/USDT:USDT', 1500, 'sell')
+
+    assert params['tdMode'] == 'isolated'
+    assert params['posSide'] == 'net'
+
+
+def test_fetch_orders_okx(default_conf, mocker, limit_order):
+
+    api_mock = MagicMock()
+    api_mock.fetch_orders = MagicMock(return_value=[
+        limit_order['buy'],
+        limit_order['sell'],
+    ])
+    api_mock.fetch_open_orders = MagicMock(return_value=[limit_order['buy']])
+    api_mock.fetch_closed_orders = MagicMock(return_value=[limit_order['buy']])
+
+    mocker.patch(f'{EXMS}.exchange_has', return_value=True)
+    start_time = datetime.now(timezone.utc) - timedelta(days=20)
+
+    exchange = get_patched_exchange(mocker, default_conf, api_mock, id='okx')
+    # Not available in dry-run
+    assert exchange.fetch_orders('mocked', start_time) == []
+    assert api_mock.fetch_orders.call_count == 0
+    default_conf['dry_run'] = False
+
+    exchange = get_patched_exchange(mocker, default_conf, api_mock, id='okx')
+
+    def has_resp(_, endpoint):
+        if endpoint == 'fetchOrders':
+            return False
+        if endpoint == 'fetchClosedOrders':
+            return True
+        if endpoint == 'fetchOpenOrders':
+            return True
+
+    mocker.patch(f'{EXMS}.exchange_has', has_resp)
+
+    history_params = {'method': 'privateGetTradeOrdersHistoryArchive'}
+
+    # happy path without fetchOrders
+    exchange.fetch_orders('mocked', start_time)
+    assert api_mock.fetch_orders.call_count == 0
+    assert api_mock.fetch_open_orders.call_count == 1
+    assert api_mock.fetch_closed_orders.call_count == 2
+    assert 'params' not in api_mock.fetch_closed_orders.call_args_list[0][1]
+    assert api_mock.fetch_closed_orders.call_args_list[1][1]['params'] == history_params
+
+    api_mock.fetch_open_orders.reset_mock()
+    api_mock.fetch_closed_orders.reset_mock()
+
+    # regular closed_orders endpoint only has history for 7 days.
+    exchange.fetch_orders('mocked', datetime.now(timezone.utc) - timedelta(days=6))
+    assert api_mock.fetch_orders.call_count == 0
+    assert api_mock.fetch_open_orders.call_count == 1
+    assert api_mock.fetch_closed_orders.call_count == 1
+    assert 'params' not in api_mock.fetch_closed_orders.call_args_list[0][1]
+
+    mocker.patch(f'{EXMS}.exchange_has', return_value=True)
+
+    # Unhappy path - first fetch-orders call fails.
+    api_mock.fetch_orders = MagicMock(side_effect=ccxt.NotSupported())
+    api_mock.fetch_open_orders.reset_mock()
+    api_mock.fetch_closed_orders.reset_mock()
+
+    exchange.fetch_orders('mocked', start_time)
+
+    assert api_mock.fetch_orders.call_count == 1
+    assert api_mock.fetch_open_orders.call_count == 1
+    assert api_mock.fetch_closed_orders.call_count == 2
+    assert 'params' not in api_mock.fetch_closed_orders.call_args_list[0][1]
+    assert api_mock.fetch_closed_orders.call_args_list[1][1]['params'] == history_params
